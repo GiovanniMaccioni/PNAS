@@ -24,6 +24,7 @@ def train_batch(model, trainloader, epoch, optimizer, scheduler, criterion):
 
         optimizer.zero_grad()
         logits = model([data, data])#TOCHECK I HAVE TO PASS THE IMAGES LIKE THIS AS FOR THE IMPLEMENTATION
+
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()

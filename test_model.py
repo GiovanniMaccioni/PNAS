@@ -1,71 +1,192 @@
 import torch
-
-import models as m
-import torch.nn as nn
-
 import itertools
+import new_models as M
+import controller as C
+import data as D
 
-import string
-import compose as comp
+import train_controller as TC
+import train_cnn as TCNN
 
-B = 5 #Maximum number of blocks
-K = 256#Number of Model samples
-N = 6#Number of repetition of the cells with stride 1<-------"CHECK HERE"!!!
-F = 32#Number of filters in the first layer
-#TOCHECK N = 2, F = 4 ---> group=in_channels out_channels must divide groups
-
-#[ H_prev_cell, H_(prev_cell-1), H_1, ..., H_(B-1)]
-inputs_indices = torch.arange(0,2+B-1)#2 pevious cell, B-1 as the last block can also have B-1 possible inputs from previous blocks in the same cell
-
-#[3x3_DWC, 5x5_DWC, 7x7_DWC, 1x7_7x1_Conv, Id, 3x3_AvgPool, 3x3_MaxPool, 3x3_DilatedConv]
-operations_indices = torch.arange(0,8)#number of operations considered is 8
-
-#Have to transform them in tensors in order to use one hot encoding!
-
-one_hot_inputs = torch.nn.functional.one_hot(inputs_indices)
-one_hot_operations = torch.nn.functional.one_hot(operations_indices)
-
-one_hot_inputs = one_hot_inputs.tolist()
-one_hot_operations = one_hot_operations.tolist()
-
-x = comp.get_combinations(one_hot_inputs[:2], one_hot_operations)
-#x = flatten2(x)
-#----> da allenare
-tr = [[elem] for elem in x]
-#x = [x]
-model_list_1 = []
-for cell in tr:
-    model_list_1.append(m.Full_Convolutional_Template(cell, N, F, 10))
-
-y = comp.get_combinations(one_hot_inputs[:3], one_hot_operations)
-#y = flatten(y)
-
-tr = list(itertools.product(x, y))
-tr = tr[1000:1000+K]
-
-model_list_2 = []
-for cell in tr:
-    model_list_2.append(m.Full_Convolutional_Template(cell, N, F, 10))
-
-#------test whole model
-
-model = model_list_2[0]
-#print(model)
-
+import gc
 
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-model = model.to(device)
+
+def flatten(list_of_lists):
+    #FIXME
+    """
+    Utility function to make the list at each step a list of tuples. Each elemnt will be a cell, each tuple a block.
+    The "list_of_lists" come in as:
+        list_of_lists
+            |
+            |___cell____
+                        |__elem__
+                        |        |___block
+                        |        |
+                        |        |___block
+                        |
+                        |__block
+    
+    I want
+        list_of_lists
+            |
+            |___cell____
+                        |___block
+                        |
+                        |___block
+                        |
+                        |___block    
+    """
+    x = []
+    for elem in list_of_lists:
+        tup = elem[0]+ elem[1] #TOCHECK Add like this to obtain a tuple of tuples
+        x.append(tup)
+    #list_of_lists[0][0]
+    return x#Return a list of tuples of tuples
+
+def get_combinations(inputs_indices, operations_indices):
+    """
+    Get all the possible cells. By passing to the function a sliced inputs_indices, i
+    can get all the possible cell structures!!!
+    """
+    #Obtain the combination with replacement of input indices
+    #e.g. 'ABC' ----> 'AA', 'AB', 'AC', 'BB', 'BC', 'CC'
+    x = list(itertools.combinations_with_replacement(inputs_indices, 2))
+
+    #Obtain the pairs excluded in the previous list
+    #e.g. 'ABC' ----> 'BA', 'CA', 'CB'
+    xx = list(itertools.product(inputs_indices, repeat=2))
+    xx = [elem for elem in xx if elem not in x]
+    #xx = [elem for elem in xx if (torch.equal(xx[0][0], x[0][0]) and torch.equal(xx[0][1], x[0][1]))]
+
+    #Obtain the combination with replacement of operations indices
+    #e.g. '123' ----> '11', '12', '13', '22', '23', '33' 
+    y = list(itertools.combinations_with_replacement(operations_indices, 2))
+
+    #Obtain the combination of operations indices
+    #e.g. '123' ----> '12', '13', '23'
+    yy = list(itertools.combinations(operations_indices, 2))
+
+    #Obtain the cartesian product
+    final1 = list(itertools.product(x, y))
+    final1 = [[elem] for elem in final1]
+    final2 = list(itertools.product(xx, yy))
+    final2 = [[elem] for elem in final2]
+
+    
+    return final1 + final2
+    #From here probably I have to prepare the dataset and then the dataloader!!
 
 
-x = [torch.randn(8, 3, 32, 32, requires_grad=True).to(device), torch.randn(8, 3, 32, 32, requires_grad=True).to(device)]
-#x = torch.randn((64, 3, 32, 32), requires_grad=True)
-#x = x.to(device)
-#with torch.cuda.amp.autocast():
-torch_out = model(x)
+def expand_cells(inputs_indices, operations_indices, num_blocks = 1, prev_combinations = None):#TOCHECK
+    combinations = get_combinations(inputs_indices[:2+num_blocks-1], operations_indices)
+    
+    #If num_blocks > 1, we must have the list of previous valid combinations and make the cross product to 
+    #obtain the new cell structures
+    if num_blocks > 1:
+        #y = get_combinations(inputs_indices[:2+num_blocks], operations_indices)
+        combinations = list(itertools.product(prev_combinations, combinations))
+        if num_blocks > 1:
+            combinations = flatten(combinations)
+    #TOCHECK If num_blocks == 1, I have to reformulate the list to be compatible with next functions
+    """else:
+        combinations = [[elem] for elem in combinations]"""
+    
+    return combinations
 
-print(torch_out.shape)
+def cells_to_tensor(cells):
+    tensor_cells = []
+    for cell in cells:
+        blocks = []
+        for block in cell:
+            inputs = torch.tensor(block[0]).view(-1)
+            operations = torch.tensor(block[1]).view(-1)
+            in_op = torch.cat((inputs, operations), dim=0)
+            blocks.append(in_op[None, :])
+        
+        blocks = torch.cat(blocks)
+        tensor_cells.append(blocks[None,:])
 
-print(model)
+    tensor_cells = torch.cat(tensor_cells)
+    
+    return tensor_cells
 
-nparameters = sum(p.numel() for p in model.parameters())
-print("Number of Parameters: ", nparameters)
+def tensors_to_loader(tensors):
+    """tensor_accuracies = torch.tensor(top_k_accuracies)
+    tensor_cells = cells_to_tensor(top_k_cells)"""
+
+    set = torch.utils.data.TensorDataset(*tensors)
+    loader = torch.utils.data.DataLoader(set, batch_size = 128, shuffle=True)
+    return loader
+
+def _to_loader(cells, accuracies):
+    tensor_accuracies = torch.tensor(accuracies)
+    tensor_cells = cells_to_tensor(cells)
+
+    return tensors_to_loader((tensor_cells, tensor_accuracies))
+
+B = 5 #Maximum number of blocks
+K = 256#256Number of Model samples
+N = 2#Number of repetition of the cells with stride 1
+F = 24#Number of filters in the forst laye
+EPOCHS = 1
+EPOCHS_CONTROLLER = 10
+
+#[H_1, ..., H_(B-1), H_prev_cell, H_(prev_cell-1)]
+inputs_indices = list(range(2+B-1))#2 previous cell, B-1 as the last block can also have B-1 possible inputs from previous blocks in the same cell
+#inputs_indices = list(string.ascii_uppercase)[:2+B-1]
+
+#[3x3_DWC, 5x5_DWC, 7x7_DWC, 1x7_7x1_Conv, Id, 3x3_AvgPool, 3x3_MaxPool, 3x3_DilatedConv]
+operations_indices = list(range(8))#number of operations considered is 8
+
+cells = expand_cells(inputs_indices, operations_indices, 1)
+
+trainset, valset, testset = D.get_CIFAR10(validation_size=5000)
+
+trainloader = torch.utils.data.DataLoader(trainset, batch_size = 512, shuffle=True, num_workers = 16)#FIXME Change eventually the learning rate along with the batchsize
+valloader = torch.utils.data.DataLoader(valset, batch_size = 512, shuffle=False, num_workers = 16)
+
+criterion_cnn = torch.nn.CrossEntropyLoss()
+
+accuracies = []
+
+input1 = torch.randn((1, 3, 32, 32))
+input2 = torch.randn((1, 3, 32, 32))
+
+"""for cell in cells:
+    #TOCHECK See if we hace to reset in some way the loaders!
+    model = M.Full_Convolutional_Template(cell, N, F, 10, input1, input2)
+    optimizer_cnn = torch.optim.Adam(model.parameters(), 0.01)
+    #TODO Control what T_max really is
+    scheduler_cnn = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_cnn, T_max = 50)
+
+    model = model.to(device)
+    model = TCNN.train(model, EPOCHS, trainloader, optimizer_cnn, scheduler_cnn, criterion_cnn)
+    accuracies.append(TCNN.evaluate(model, valloader, criterion_cnn))
+    #TOCHECK attempt to move away from GPU the loaded model
+    model = model.to("cpu")
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()"""
+
+cells = expand_cells(inputs_indices, operations_indices, 2, cells)
+cells = cells[1000:1100]
+for cell in cells:
+    #TOCHECK See if we hace to reset in some way the loaders!
+    model = M.Full_Convolutional_Template(cell, N, F, 10, input1, input2)
+    optimizer_cnn = torch.optim.Adam(model.parameters(), 0.01)
+    #TOCHECK Control what T_max really is
+    scheduler_cnn = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_cnn, T_max = 50)
+
+    model = model.to(device)
+    model = TCNN.train(model, EPOCHS, trainloader, optimizer_cnn, scheduler_cnn, criterion_cnn)
+    accuracies.append(TCNN.evaluate(model, valloader, criterion_cnn))
+    #TOCHECK attempt to move away from GPU the loaded model
+    model = model.to("cpu")
+    del model
+    gc.collect()
+    torch.cuda.empty_cache()
+
+"""nparameters = sum(p.numel() for p in model.parameters())
+print("Number of Parameters: ", nparameters)"""
+
+print("top")

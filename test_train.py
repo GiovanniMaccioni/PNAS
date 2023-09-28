@@ -7,6 +7,8 @@ import data as D
 import train_controller as TC
 import train_cnn as TCNN
 
+import gc
+
 device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
 def flatten(list_of_lists):
@@ -27,7 +29,7 @@ def flatten(list_of_lists):
     I want
         list_of_lists
             |
-            |___cekk____
+            |___cell____
                         |___block
                         |
                         |___block
@@ -114,7 +116,7 @@ def tensors_to_loader(tensors):
 
     set = torch.utils.data.TensorDataset(*tensors)
     loader = torch.utils.data.DataLoader(set, batch_size = 128, shuffle=True)
-    return
+    return loader
 
 def _to_loader(cells, accuracies):
     tensor_accuracies = torch.tensor(accuracies)
@@ -157,7 +159,7 @@ def _to_loader(cells, accuracies):
 - Fine Tune Predictor, with new accuracies<------HERE I NEED ONE HOT ENCODING
 """
 B = 5 #Maximum number of blocks
-K = 256#Number of Model samples
+K = 256#256Number of Model samples
 N = 2#Number of repetition of the cells with stride 1
 F = 24#Number of filters in the forst laye
 EPOCHS = 1
@@ -170,104 +172,6 @@ inputs_indices = list(range(2+B-1))#2 previous cell, B-1 as the last block can a
 #[3x3_DWC, 5x5_DWC, 7x7_DWC, 1x7_7x1_Conv, Id, 3x3_AvgPool, 3x3_MaxPool, 3x3_DilatedConv]
 operations_indices = list(range(8))#number of operations considered is 8
 
-"""x = get_combinations(one_hot_inputs[:2], one_hot_operations)
-#x = flatten2(x)
-#----> da allenare
-
-build_cell([x[128]])
-
-y = get_combinations(one_hot_inputs[:3], one_hot_operations)
-#y = flatten(y)
-
-tr = list(itertools.product(x, y))
-tr = tr[:K]
-build_cell(tr)
-
-w = get_combinations(one_hot_inputs[:4], one_hot_operations)
-
-tr = list(itertools.product(tr, w))
-tr = tr[:K]
-
-tr = flatten(tr)
-build_cell(tr[0])
-
-
-z = get_combinations(one_hot_inputs[:5], one_hot_operations)
-
-tr = list(itertools.product(tr, z))
-tr = tr[:K]
-
-tr = flatten(tr)"""
-
-"""
-def ProgressiveNeuralArchitectureSearch(max_num_blocks, num_filters_first_layer, beam_size, num_times_unroll_cell, max_epochs, trainset, valset):
-    cells = expand_cells(one_hot_inputs, one_hot_operations, 1)
-    model_list = []
-    for cell in cells:
-        model_list.append(M.Full_Convolutional_Template(cell, num_times_unroll_cell, num_filters_first_layer, num_classes=10))
-
-    accuracies = []
-    for model in model_list:
-        model = train(model, max_epochs, trainset)
-        accuracies.append(validate(model, valset))
-    
-    controller = C.RNN_controller()
-
-    #I HAVE TO CREATE THE DATA LOADER!! FOR CELLS AND ACCURACIES
-    #TO TENSOR AND THEN TO DATALOADER??
-
-    controller = train(controller, cells, accuracies)
-
-    for num_blocks in range(2, max_num_blocks+1):
-        cells = expand_cells(one_hot_inputs, one_hot_operations, num_blocks)
-        
-        
-        ordered_predictor_accuracies = []
-        ordered_cells = []
-        temp_acc = 0
-        for index, cell in enumerate(cells):
-            acc = validate(controller, cell)
-            if temp_acc < acc:
-                temp_acc = acc
-                ordered_cells.insert(0, cell)
-                ordered_predictor_accuracies.insert(0, acc)
-            else:
-                ordered_cells.append(cell)
-                ordered_predictor_accuracies.append(acc)
-
-        
-        top_k_cells = ordered_cells[:beam_size]
-        top_k_accuracies = ordered_predictor_accuracies[:beam_size]
-
-        model_list = []
-        for cell in top_k_cells:
-            model_list.append(M.Full_Convolutional_Template(cell, num_times_unroll_cell, num_filters_first_layer, num_classes=10))
-
-        accuracies = []
-        for model in model_list:
-            model = train(model, max_epochs, trainset)
-            accuracies.append(validate(model, valset))
-
-        #I HAVE TO CREATE THE DATA LOADER!! FOR CELLS AND ACCURACIES
-        #TO TENSOR AND THEN TO DATALOADER??
-
-        controller = train(controller, cells, accuracies)#HERE IS FINETUNING!!!
-
-    
-    return top_k_cells[0]
-"""
-
-"""mod = C.RNN_controller(6, 8, 100, 100, 2)
-
-cells = []
-prev_cells = None
-for i in range(1,6):
-    cells = expand_cells(inputs_indices, operations_indices, i, prev_cells)
-    cells = cells[:50]
-    prev_cells = cells
-    #transform cells in tensors:
-    tensor_cells = cells_to_tensor(cells)
-    out = mod(tensor_cells)"""
 
 def ProgressiveNeuralArchitectureSearch(input_indices, operations_indices, max_num_blocks, num_filters_first_layer, beam_size, num_times_unroll_cell, max_epochs, trainloader, valloader):
 
@@ -286,7 +190,7 @@ def ProgressiveNeuralArchitectureSearch(input_indices, operations_indices, max_n
         model_list.append(M.Full_Convolutional_Template(cell, num_times_unroll_cell, num_filters_first_layer, num_classes=10))
 
     accuracies = []
-    for model in model_list[:2]:#DEBUG
+    for model in model_list:
         optimizer_cnn = torch.optim.Adam(model.parameters(), 0.01)
         #TODO Control what T_max really is
         scheduler_cnn = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_cnn, T_max = 50)
@@ -294,15 +198,20 @@ def ProgressiveNeuralArchitectureSearch(input_indices, operations_indices, max_n
         model = model.to(device)
         model = TCNN.train(model, max_epochs, trainloader, optimizer_cnn, scheduler_cnn, criterion_cnn)
         accuracies.append(TCNN.evaluate(model, valloader, criterion_cnn))
+        #TOCHECK attempt to move away from GPU the loaded model
+        model = model.to("cpu")
+        del model
+        gc.collect()
+        torch.cuda.empty_cache()
 
     #I HAVE TO CREATE THE DATA LOADER!! FOR CELLS AND ACCURACIES
     #TO TENSOR AND THEN TO DATALOADER??
     tensor_accuracies = torch.tensor(accuracies)
-    tensor_cells = cells_to_tensor(cells[:2])#DEBUG
+    tensor_cells = cells_to_tensor(cells)
     trainlset_contr = torch.utils.data.TensorDataset(tensor_cells, tensor_accuracies)
-    trainloader_contr = torch.utils.data.DataLoader(trainlset_contr, batch_size = 128, shuffle=True)
+    trainloader_contr = torch.utils.data.DataLoader(trainlset_contr, batch_size = 128, shuffle=True)#TOCHECK eventually change the batch size to K
 
-    controller = TC.train(controller, 1, trainloader_contr, optimizer_contr, criterion_contr)
+    controller = TC.train(controller, EPOCHS_CONTROLLER, trainloader_contr, optimizer_contr, criterion_contr)
     #Change the learning rate with number of blocks > 1
     #TOCHECK is this the correct way???
     for g in optimizer_contr.param_groups:
@@ -344,11 +253,17 @@ def ProgressiveNeuralArchitectureSearch(input_indices, operations_indices, max_n
             optimizer_cnn = torch.optim.Adam(model.parameters(), 0.01)
             #TODO Control what T_max really is
             scheduler_cnn = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_cnn, T_max = 50)
-            #TOCHECK See if we hace to reset in some way the loaders!
+            #TOCHECK See if we have to reset in some way the loaders!
             model = model.to(device)
             model = TCNN.train(model, max_epochs, trainloader, optimizer_cnn, scheduler_cnn, criterion_cnn)
             #TOCHECK maybe here I have to put the testloader and not the valloader
             accuracies.append(TCNN.evaluate(model, valloader, criterion_cnn))
+            #TOCHECK attempt to move away from GPU the loaded model
+            model = model.to("cpu")
+            del model
+            gc.collect()
+            torch.cuda.empty_cache()
+
 
         #I HAVE TO CREATE THE DATA LOADER!! FOR CELLS AND ACCURACIES
         #TO TENSOR AND THEN TO DATALOADER??
@@ -357,7 +272,7 @@ def ProgressiveNeuralArchitectureSearch(input_indices, operations_indices, max_n
         tensor_cells = cells_to_tensor(top_k_cells)
         trainlset_contr = torch.utils.data.TensorDataset(tensor_cells, tensor_accuracies)
         trainloader_contr = torch.utils.data.DataLoader(trainlset_contr, batch_size = 128, shuffle=True)
-        controller = TC.train(controller, 1, trainloader_contr, optimizer_contr, criterion_contr)#HERE IS FINETUNING!!!
+        controller = TC.train(controller, EPOCHS_CONTROLLER, trainloader_contr, optimizer_contr, criterion_contr)#TOCHECK HERE IS FINETUNING!!! See if the number o9f epochs is different here
         cells = top_k_cells
 
     #ENDFOR
@@ -366,13 +281,14 @@ def ProgressiveNeuralArchitectureSearch(input_indices, operations_indices, max_n
 
 
 
-trainset, valset, testset = D.get_CIFAR10(5000)
+trainset, valset, testset = D.get_CIFAR10(validation_size=5000)
 
-trainloader = torch.utils.data.DataLoader(trainset, batch_size = 128, shuffle=True)
-valloader = torch.utils.data.DataLoader(valset, batch_size = 128, shuffle=False)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size = 512, shuffle=True, num_workers = 16)#FIXME Change eventually the learning rate along with the batchsize
+valloader = torch.utils.data.DataLoader(valset, batch_size = 512, shuffle=False, num_workers = 16)
 
 
-ProgressiveNeuralArchitectureSearch(inputs_indices, operations_indices, B, F, K, N, EPOCHS, trainloader, valloader)
+top = ProgressiveNeuralArchitectureSearch(inputs_indices, operations_indices, B, F, K, N, EPOCHS, trainloader, valloader)
+print(top)
 
 
 

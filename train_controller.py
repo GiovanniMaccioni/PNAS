@@ -27,9 +27,9 @@ def train(controller, epochs, trainloader, optimizer, criterion):
             optimizer.zero_grad()
 
             output = controller(cells)
+            output = output.squeeze()
 
-            loss = criterion(output, accuracies)# Using a target size (torch.Size([2])) that is different to the input size (torch.Size([2, 1])). This will likely lead to incorrect results due to broadcasting. Please ensure they have the same size.
-                                                #return F.l1_loss(input, target, reduction=self.reduction)
+            loss = criterion(output, accuracies)
             loss.backward()
             
             optimizer.step()

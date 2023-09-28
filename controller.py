@@ -50,8 +50,6 @@ class RNN_controller(nn.Module):
         out = self.sig(out)
 
         return out#32x1?????
-        #after getting the accuracies, i can chose in the "main script", the best ones by scanning the one hot encodings
-        #relative to the best accuracies in some way
 
 
 
@@ -69,7 +67,7 @@ class MLP(nn.Module):
         self.embedding_O = nn.Embedding(input_dim_O, emb_dim)
 
         self.linear1 = nn.Linear(emb_dim, hid_units)
-        self.linear2 = nn.Linear(hid_units, hid_units)#bias = 1.8 (page 8)
+        self.linear2 = nn.Linear(hid_units, hid_units)#FIXME bias = 1.8 (page 8)
         self.actv = nn.ReLU()
         self.sig = nn.Sigmoid()
 

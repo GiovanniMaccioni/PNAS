@@ -49,7 +49,7 @@ def flatten(list_of_lists_of_tuples):
     """
     x = []
     for elem in list_of_lists_of_tuples:
-        tup = elem[0]+(elem[1],) #TOCHECK Add like this to obtain a tuple of tuples
+        tup = elem[0]+(elem[1],)#TOCHECK Add like this to obtain a tuple of tuples
         x.append(tup)
     #list_of_lists[0][0]
     return x#Return a list of tuples of tuples
