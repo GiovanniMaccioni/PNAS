@@ -1,3 +1,5 @@
+UNOFFICIAL RE-IMPLEMENTATION OF [Progressive Neural Network Search, Liu et al.](https://openaccess.thecvf.com/content_ECCV_2018/html/Chenxi_Liu_Progressive_Neural_Architecture_ECCV_2018_paper.htmlhttps://arxiv.org/abs/2209.08167)
+
 #
 To run PNAS:
     pnas_main.py --pnas
