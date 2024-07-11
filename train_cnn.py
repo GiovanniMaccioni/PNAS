@@ -1,57 +1,60 @@
 import torch
 from tqdm import tqdm
+import numpy as np
 
-#import wandb
-
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-
-def train(model, epochs, trainloader, optimizer, scheduler, criterion):
+def train(model, epochs, trainloader, optimizer, scheduler, criterion, device):
 
     for epoch in range(epochs):
-        loss_epoch = train_batch(model, trainloader, epoch, optimizer, scheduler, criterion)
-        #val_accuracy, val_loss = evaluate_batch(model, validation_loader, criterion, device)
-        #wandb.log({"Train Loss": loss_epoch, "Validation Accuracy": val_accuracy, "Validation Loss": val_loss})
+        loss_epoch = train_batch(model, trainloader, epoch, optimizer, scheduler, criterion, device)
 
     return model
 
-def train_batch(model, trainloader, epoch, optimizer, scheduler, criterion):
+def train_batch(model, trainloader, epoch, optimizer, scheduler, criterion, device):
     model.train()
-    running_loss = 0
-    num_batches = len(trainloader)
-    for (data, labels) in tqdm(trainloader, desc=f'Training epoch {epoch}', leave=True):
+    progress_bar = tqdm(total=len(trainloader), unit='step')
+    losses = []
+    for (data, labels) in trainloader:
         data = data.to(device)
         labels = labels.to(device)
 
         optimizer.zero_grad()
-        logits = model([data, data])#TOCHECK I HAVE TO PASS THE IMAGES LIKE THIS AS FOR THE IMPLEMENTATION
+        logits = model(data)
 
         loss = criterion(logits, labels)
         loss.backward()
         optimizer.step()
-        scheduler.step()
 
-        running_loss += loss.item()/num_batches #TOCHECK
-        
-    return running_loss
+        losses.append(loss.item())
 
-def evaluate(model, loader, criterion):
+        progress_bar.set_description(f"CNN Epoch {epoch}")
+        progress_bar.set_postfix(loss=np.mean(losses))  # Update the loss value
+        progress_bar.update(1)
+    
+    #Every epoch the scheduler makes a step
+    scheduler.step()
+
+    return np.mean(losses)
+
+def evaluate(model, loader, device):
     model.eval()
-    accuracy = 0
-    running_loss = 0
-    #num_batches = len(validation_loader)
-    len_data = len(loader)*(loader.batch_size)
+    accuracy = []
+
+    progress_bar = tqdm(total=len(loader), unit='step')
+
     with torch.no_grad():
-        for (data, labels) in tqdm(loader, desc=f'Evaluating', leave=True):
+        for (data, labels) in loader:
             data = data.to(device)
             labels = labels.to(device)
-            logits = model([data, data])
-            loss = criterion(logits, labels)
+            logits = model(data)
 
             preds = torch.argmax(logits, dim=1)
             preds = preds.detach().cpu()
             labels = labels.cpu()
             
-            accuracy += (preds==labels).float().sum()
-            running_loss += loss.item()
+            accuracy.append((preds==labels).float().sum()/len(labels))
 
-    return accuracy/len_data#, running_loss/len_data
+            progress_bar.set_description(f"CNN Evaluation")
+            progress_bar.set_postfix(loss=np.mean(accuracy))  # Update the loss value
+            progress_bar.update(1)
+
+    return np.mean(accuracy)
